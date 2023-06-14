@@ -1,81 +1,75 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
-use crate::Operator;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Token {
-	None,
-	Operator(Operator),
-	Number(f32),
-	Name(String),
-	String(String),
-	Vec(Vec<Token>),
-	Map(HashMap<String, Token>),
+#[derive(/* Debug, */ Clone, Copy, PartialEq)]
+pub enum Token<'a> {
+	Operator(&'a [u8]), // punctuation symbols, defining the syntax
+	Number(&'a [u8]), // Digits only
+	Name(&'a [u8]), // not a string literal, but a variable's name
+	String(&'a [u8]), // Literally a string literal(ly)
 }
 
-pub fn tokenize(bytes: &[u8], stack: &mut Vec<Token>, until: Option<u8>) -> usize {
-    let mut skip = 0; // bytes to skip because of internal parsing between iterations
-    let mut iterator = bytes.iter()
-		.enumerate()
-		.filter(|(_, &b)| !b.is_ascii_whitespace()); // filter out whitespaces
-	while let Some((count, &byte)) = iterator.nth(skip) {
-		if let Some(until) = until {
-			if byte == until {
-				return count + 1;
-			}
+impl<'a> Token<'a> {
+	pub fn bytes(&'a self) -> &'a [u8] {
+		match self {
+			Self::Operator(s) => *s,
+			Self::Number(s) => *s,
+			Self::Name(s) => *s,
+			Self::String(s) => *s,
 		}
-	    skip = 0;
+	}
+}
+
+impl<'a> Debug for Token<'a> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let s = String::from_utf8_lossy(self.bytes());
+		match self {
+			Self::Operator(_) => write!(f, "Token::Operator({})", s),
+			Self::Number(_) => write!(f, "Token::Number({})", s),
+			Self::Name(_) => write!(f, "Token::Name({})", s),
+			Self::String(_) => write!(f, "Token::String({})", s),
+		}
+	}
+}
+
+// Scanning/Lexing function. It receives a string of bytes and outputs a steam of tokens (vector)
+pub fn lex<'a>(input: &'a [u8], output: &mut Vec<Token<'a>>) {
+	let mut iter = input.iter().enumerate().peekable();
+
+	// TODO most match cases do the same thing after matching. So write a generic handler (closure) for those
+	while let Some((index, &byte)) = iter.next() {
 		match byte {
-			// parse a name
-			b'a'..=b'z' | b'A'..=b'Z' => {
-				skip = do_name(&bytes[count+1..]);
-				let string = String::from_utf8_lossy(&bytes[count..=count+skip]).into_owned(); // todo replace with from_utf8_unchecked()
-				dbg!("Got a name: {}", &string);
-				stack.push(Token::Name(string));
-			}
-			// parse a number
-			b'0'..=b'9' => {
-				let mut number = (byte - b'0') as f32;
-				skip = do_digits(&bytes[count+1..], &mut number);
-				dbg!("Got a number: {}", &number);
-				stack.push(Token::Number(number));
-			}
-			// read a string
-			b'"' | b'\'' => {
-				let start = count + 1;
-				let Some(index) = bytes[start..].iter().position(|&b| b == byte) else {
-					panic!("Missing quotation marks ({})", byte as char);
+			b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+				while iter.by_ref().next_if(|(_,&b)| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'_')).is_some() {}
+				let Some((end,_)) = iter.peek() else {
+					output.push(Token::Name(&input[index..]));
+					break;
 				};
-				skip = index + 1;
-				let string = String::from_utf8_lossy(&bytes[start..start+index]).into_owned(); // todo replace with from_utf8_unchecked()
-				dbg!("Got a string: {}", &string);
-				stack.push(Token::String(string));
+				output.push(Token::Name(&input[index..*end]));
 			}
-			b'(' => {
-				skip = tokenize(&bytes[count+1..], stack, Some(b')'));
+			// IMPORTANT: must come before punctuation (operator) checking because 'quotes' are considered punctuation
+			b'"' | b'\'' => {
+				while iter.by_ref().next_if(|(_,b)| **b != byte).is_some() {}
+				let Some((end, _)) = iter.next() else {
+					panic!("Reached end of data and didn't find any closing/matching ({byte})");
+				};
+				output.push(Token::String(&input[index+1..end]));
 			}
-			// parse operators such as: *, /, +, -, &, ...
-			_ if Operator::get_ascii_samples().as_bytes().contains(&byte) => {
-				let op = Operator::from_ascii(byte);
-				dbg!("Got an operator: {:?}", op);
-				stack.push(Token::Operator(op));
+			b'0'..=b'9' => {
+				while iter.by_ref().next_if(|(_,b)| b.is_ascii_digit()).is_some() {}
+				let Some((end, _)) = iter.peek() else {
+					output.push(Token::Number(&input[index..]));
+					break;
+				};
+				output.push(Token::Number(&input[index..*end]));
 			}
-			_ => {
-				panic!("Unkown syntax: used a character in a weird place: ({})", byte as char);
+			_ if byte.is_ascii_punctuation() => {
+				output.push(Token::Operator(&input[index..=index])); // todo? byte instead of slice?
 			}
+			_ if byte.is_ascii_whitespace() => continue, // skips whitespaces
+			_ => {}
 		}
 	}
-	bytes.len()
-}
-
-fn do_name(input: &[u8]) -> usize {
-	for (count, b) in input.iter().enumerate() {
-		match b {
-			b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' => {}
-			_ => return count,
-		}
-	}
-	0
 }
 
 fn do_digits(input: &[u8], output: &mut f32) -> usize {

@@ -16,7 +16,7 @@ fn main() {
 		s.push(' ');
 	}
 
-	token::tokenize(&s.as_bytes(), &mut stack, None);
+	token::lex(&s.as_bytes(), &mut stack);
 
 	dbg!(stack);
 }
